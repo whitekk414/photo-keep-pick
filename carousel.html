@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>穿搭轮播 · Photo Keep Pick</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f6f3ec;color:#252b23;font:15px/1.5 "Microsoft YaHei",system-ui,sans-serif}main{max-width:1180px;margin:auto;padding:24px}header,.actions,.controls,.strip{display:flex;align-items:center;gap:12px;flex-wrap:wrap}header{justify-content:space-between;margin-bottom:18px}h1{margin:0;font-size:26px}button,.import{border:1px solid #a09e91;border-radius:6px;background:#fffdf7;color:inherit;font:inherit;padding:7px 13px;cursor:pointer}button:disabled{opacity:.45;cursor:default}.primary{background:#294e3e;color:white;border-color:#294e3e}.empty{display:block;text-align:center;border:2px dashed #999b89;padding:58px 12px;cursor:pointer}.work{display:grid;grid-template-columns:minmax(320px,1.05fr) minmax(320px,1fr);gap:20px}.work[hidden],.empty[hidden]{display:none}h2{font-size:16px;margin:8px 0}.source{width:100%;height:clamp(260px,43vh,470px);display:block;background:#292c27;touch-action:none;cursor:crosshair;border-radius:6px}.cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.card{padding:4px;text-align:left}.card[aria-pressed=true],.thumb[aria-pressed=true]{outline:3px solid #3f7057;outline-offset:1px}.card canvas{display:block;width:100%;height:auto;aspect-ratio:4/5}.card span{display:block;padding:5px;font-weight:600}.controls{margin:10px 0}.strip{flex-wrap:nowrap;overflow-x:auto;padding:5px 4px}.thumb{padding:3px;flex:none;max-width:105px}.thumb img{display:block;width:76px;height:60px;object-fit:cover}.thumb span{display:block;max-width:76px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:12px}input[type=range]{max-width:155px}small{color:#52594b}.drop{outline:3px dashed #3f7057;outline-offset:-4px}#status{min-height:22px}#folder{display:none}@media(max-width:760px){main{padding:12px}.work{grid-template-columns:1fr}.preview{grid-row:1}.card canvas{max-height:25vh;object-fit:contain}.source{height:32vh}}
+</style>
+<main><header><h1>穿搭轮播</h1><div class="actions"><label class="import" for="folder">导入照片</label><input id="folder" type="file" accept="image/jpeg,image/png,image/webp" multiple><button class="primary" id="export" disabled>导出三张 JPEG（ZIP）</button></div></header>
+<label class="empty" id="empty" for="folder">拖入一组穿搭照片，或点击选择<br><small>JPEG、PNG、WebP · 本机处理</small></label>
+<div id="work" class="work" hidden><section><h2 id="editing">调整封面</h2><canvas class="source" id="source" aria-label="原图取景，点击定位或拖动"></canvas>
+<div class="controls"><label>放大 <input id="zoom" type="range" min="1" max="4" step=".01" value="1"></label><button id="reset">恢复起始构图</button></div><small>点击定位，或拖动取景框。下方照片可替换当前选图。</small><div id="strip" class="strip"></div></section>
+<section class="preview"><h2>发布顺序</h2><div id="cards" class="cards"></div><div class="controls"><label><input id="remember" type="checkbox"> 记住导出时的构图</label><button id="forget">清除偏好</button></div><small>每张 1080 × 1350，按封面、近景、细节依次保存。</small></section></div><p role="status" id="status"></p></main>
+<script>
+'use strict';
+const $=id=>document.getElementById(id);
+const names=['穿搭封面','人物近景','配饰细节'], files=['01-cover.jpg','02-portrait.jpg','03-detail.jpg'];
+const defaults=[{x:.5,y:.5,z:1},{x:.5,y:.29,z:1.45},{x:.5,y:.72,z:2.1}];
+const storeKey='photo-keep-pick.carousel.v1',ratio=4/5;
+let images=[],slots=[],active=0,geometry,drag,busy=false,preferences=null;
+const cards=[];
+const clamp=(n,lo,hi)=>Math.max(lo,Math.min(hi,n));
+function stored(){
+ try{const p=JSON.parse(localStorage.getItem(storeKey));if(Array.isArray(p)&&p.length===3&&p.every(v=>v&&[v.x,v.y,v.z].every(Number.isFinite)&&v.x>=0&&v.x<=1&&v.y>=0&&v.y<=1&&v.z>=1&&v.z<=4))return p;}catch{}
+ return null;
+}
+preferences=stored();$('remember').checked=!!preferences;
+function initial(i){return {...(($('remember').checked&&preferences)||defaults)[i]};}
+function box(slot,i){
+ const im=images[slot.index].bitmap;
+ // The cover starts with the complete outfit, adding a matte where needed.
+ const fit=i===0?Math.max:Math.min;
+ const w=fit(im.width,im.height*ratio)/slot.z,h=w/ratio;
+ const left=w>=im.width?(im.width-w)/2:clamp(slot.x*im.width-w/2,0,im.width-w);
+ const top=h>=im.height?(im.height-h)/2:clamp(slot.y*im.height-h/2,0,im.height-h);
+ return {left,top,w,h};
+}
+function render(canvas,slot,i){
+ const ctx=canvas.getContext('2d'),b=box(slot,i),scale=canvas.width/b.w;
+ ctx.fillStyle='#eee9e1';ctx.fillRect(0,0,canvas.width,canvas.height);
+ ctx.imageSmoothingQuality='high';ctx.drawImage(images[slot.index].bitmap,-b.left*scale,-b.top*scale,images[slot.index].bitmap.width*scale,images[slot.index].bitmap.height*scale);
+}
+function draw(){
+ if(!slots.length)return;
+ slots.forEach((s,i)=>{render(cards[i].firstChild,s,i);cards[i].setAttribute('aria-pressed',String(i===active));});
+ const s=slots[active],im=images[s.index].bitmap,c=$('source'),ctx=c.getContext('2d');
+ const w=c.clientWidth,h=c.clientHeight;if(!w||!h)return;
+ c.width=w;c.height=h;const scale=Math.min(w/im.width,h/im.height),left=(w-im.width*scale)/2,top=(h-im.height*scale)/2;
+ geometry={scale,left,top};
+ ctx.drawImage(im,left,top,im.width*scale,im.height*scale);
+ const b=box(s,active),x=left+b.left*scale,y=top+b.top*scale;
+ ctx.fillStyle='rgba(15,20,15,.52)';ctx.beginPath();ctx.rect(0,0,w,h);ctx.rect(x,y,b.w*scale,b.h*scale);ctx.fill('evenodd');
+ ctx.strokeStyle='#fff5a7';ctx.lineWidth=2;ctx.strokeRect(x,y,b.w*scale,b.h*scale);
+ $('editing').textContent='调整'+names[active];$('zoom').value=s.z;
+ Array.from($('strip').children).forEach((el,i)=>el.setAttribute('aria-pressed',String(i===s.index)));
+}
+names.forEach((name,i)=>{
+ const card=document.createElement('button'),canvas=document.createElement('canvas'),caption=document.createElement('span');
+ card.className='card';canvas.width=256;canvas.height=320;caption.textContent=name;
+ card.append(canvas,caption);card.onclick=()=>{active=i;draw()};$('cards').append(card);cards.push(card);
+});
+async function load(list){
+ if(busy||!list.length)return;
+ busy=true;$('export').disabled=true;
+ const added=[],skipped=[];
+ for(const f of list){
+  try{
+   const bitmap=await createImageBitmap(f);
+   const c=document.createElement('canvas');c.width=100;c.height=Math.max(1,Math.round(100*bitmap.height/bitmap.width));c.height=Math.min(c.height,200);
+   c.getContext('2d').drawImage(bitmap,0,0,c.width,c.height);
+   added.push({name:f.name,bitmap,thumb:c.toDataURL('image/jpeg')});
+  }catch{skipped.push(f.name)}
+ }
+ if(added.length){
+  images.push(...added);
+  if(!slots.length)slots=names.map((_,i)=>({index:i===1&&images.length>1?1:0,...initial(i)}));
+  added.forEach((item,k)=>{
+   const i=images.length-added.length+k,btn=document.createElement('button'),img=new Image(),label=document.createElement('span');
+   btn.className='thumb';img.src=item.thumb;img.alt='';label.textContent=item.name;btn.append(img,label);
+   btn.onclick=()=>{slots[active]={index:i,...initial(active)};draw()};$('strip').append(btn);
+  });
+  $('empty').hidden=true;$('work').hidden=false;draw();
+ }
+ $('status').textContent='已导入 '+images.length+' 张照片。'+(skipped.length?'无法读取：'+skipped.join('、'):'');
+ busy=false;$('export').disabled=!slots.length;
+}
+$('folder').onchange=e=>{load(Array.from(e.target.files));e.target.value=''};
+document.ondragover=e=>{e.preventDefault();document.body.classList.add('drop')};
+document.ondragleave=e=>{if(!e.relatedTarget)document.body.classList.remove('drop')};
+document.ondrop=e=>{e.preventDefault();document.body.classList.remove('drop');load(Array.from(e.dataTransfer.files))};
+function point(e){const r=$('source').getBoundingClientRect(),im=images[slots[active].index].bitmap;
+ return {x:(e.clientX-r.left-geometry.left)/(geometry.scale*im.width),y:(e.clientY-r.top-geometry.top)/(geometry.scale*im.height)};}
+$('source').onpointerdown=e=>{
+ if(!geometry)return;const p=point(e);if(p.x<0||p.x>1||p.y<0||p.y>1)return;
+ const s=slots[active],im=images[s.index].bitmap,b=box(s,active);
+ drag={p,cx:(b.left+b.w/2)/im.width,cy:(b.top+b.h/2)/im.height,moved:false};$('source').setPointerCapture(e.pointerId);
+};
+$('source').onpointermove=e=>{
+ if(!drag)return;const p=point(e),dx=p.x-drag.p.x,dy=p.y-drag.p.y;
+ if(!drag.moved&&Math.hypot(dx,dy)<.006)return;
+ drag.moved=true;Object.assign(slots[active],{x:clamp(drag.cx+dx,0,1),y:clamp(drag.cy+dy,0,1)});draw();
+};
+$('source').onpointerup=e=>{if(!drag)return;if(!drag.moved){const p=point(e);Object.assign(slots[active],{x:clamp(p.x,0,1),y:clamp(p.y,0,1)})}drag=null;draw()};
+$('source').onpointercancel=()=>{drag=null};
+$('zoom').oninput=e=>{slots[active].z=Number(e.target.value);draw()};
+$('reset').onclick=()=>{Object.assign(slots[active],initial(active));draw()};
+$('forget').onclick=()=>{try{localStorage.removeItem(storeKey);preferences=null;$('remember').checked=false;$('status').textContent='已清除本机轮播构图偏好。'}catch{$('status').textContent='浏览器未允许访问本地存储。'}};
+new ResizeObserver(draw).observe($('source'));
+// ZIP stored entries (JPEGs already use compression). Names are fixed ASCII.
+function zip(entries){
+ const local=[],central=[];let offset=0;
+ function header(size){const bytes=new Uint8Array(size),view=new DataView(bytes.buffer);
+  return {bytes,u16:(at,v)=>view.setUint16(at,v,true),u32:(at,v)=>view.setUint32(at,v,true)};}
+ const table=Uint32Array.from({length:256},(_,n)=>{for(let k=0;k<8;k++)n=(n>>>1)^((n&1)?0xedb88320:0);return n});
+ for(const {name,data} of entries){
+  const filename=new TextEncoder().encode(name),h=header(30),c=header(46);
+  let crc=0xffffffff;for(const b of data)crc=(crc>>>8)^table[(crc^b)&255];crc=(crc^0xffffffff)>>>0;
+  h.u32(0,0x04034b50);h.u16(4,20);h.u16(12,33);h.u32(14,crc);h.u32(18,data.length);h.u32(22,data.length);h.u16(26,filename.length);
+  c.u32(0,0x02014b50);c.u16(4,20);c.bytes.set(h.bytes.subarray(4,28),6);c.u32(42,offset);
+  local.push(h.bytes,filename,data);central.push(c.bytes,filename);offset+=30+filename.length+data.length;
+ }
+ const end=header(22);end.u32(0,0x06054b50);end.u16(8,entries.length);end.u16(10,entries.length);
+ end.u32(12,central.reduce((n,b)=>n+b.length,0));end.u32(16,offset);
+ return new Blob([...local,...central,end.bytes],{type:'application/zip'});
+}
+$('export').onclick=async()=>{
+ if(busy||!slots.length)return;busy=true;$('export').disabled=true;
+ const snapshot=slots.map(s=>({...s})),savePreferences=$('remember').checked;
+ try{
+  const canvas=document.createElement('canvas');canvas.width=1080;canvas.height=1350;
+  const entries=[];
+  for(const [i,s] of snapshot.entries()){
+   render(canvas,s,i);
+   const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',.94));
+   if(!blob)throw Error('JPEG 编码失败');
+   entries.push({name:files[i],data:new Uint8Array(await blob.arrayBuffer())});
+  }
+  const url=URL.createObjectURL(zip(entries)),link=document.createElement('a');
+  link.href=url;link.download='穿搭轮播.zip';document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);
+  $('status').textContent='已生成 3 张 JPEG，请查看浏览器下载。';
+  if(savePreferences){
+   const next=snapshot.map(({x,y,z})=>({x,y,z}));
+   try{localStorage.setItem(storeKey,JSON.stringify(next));preferences=next}catch{$('status').textContent+=' 当前浏览器无法保存构图偏好。'}
+  }
+ }catch(error){$('status').textContent='导出失败：'+error.message}
+ finally{busy=false;$('export').disabled=false}
+};
+</script></html>
