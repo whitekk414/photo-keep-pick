@@ -51,23 +51,47 @@ def subject(image):
     total = sum(mass)
     x = sum((i%8+.5)*v for i,v in enumerate(mass))/(8*total) if total else .5
     y = sum((i//8+.5)*v for i,v in enumerate(mass))/(6*total) if total else .5
-    return x, y, ImageStat.Stat(image.convert("L").resize((16, 16))).mean[0]/255
+    gray = image.convert("L")
+    layout = gray.resize((8, 6), Image.Resampling.BOX)
+    return (x, y, ImageStat.Stat(gray.resize((16, 16))).mean[0]/255,
+            *(pixel/255 for pixel in layout.getdata()))
+
+
+def scene_match(current, stored):
+    """Compare layouts in both directions. Old records have only three features."""
+    direction = 1
+    layout_error = 0.
+    if len(stored) == len(current) == 51:
+        grid = stored[3:]
+        reversed_grid = [grid[row+7-col] for row in range(0, 48, 8) for col in range(8)]
+        direct = math.dist(current[3:], grid)/math.sqrt(48)
+        reflected = math.dist(current[3:], reversed_grid)/math.sqrt(48)
+        # Only reverse a learned pan for a close, unambiguous mirrored match.
+        if reflected < .09 and reflected + .03 < direct:
+            direction = -1
+        layout_error = reflected if direction < 0 else direct
+        if layout_error > .16:
+            return math.inf, direction
+    x, y, light = stored[:3]
+    if direction < 0:
+        x = 1-x
+    return math.dist(current[:3], (x, y, light)) + layout_error, direction
 
 
 def suggested(size, ratio, scene, samples):
     default = box_at(size, ratio, scene[0], scene[1], 1)
     neighbors = []
     for stored_scene, original, final in samples:
-        distance = math.dist(scene, stored_scene)
+        distance, direction = scene_match(scene, stored_scene)
         if distance <= .32:
-            neighbors.append((distance, original, final))
+            neighbors.append((distance, direction, original, final))
     neighbors.sort(key=lambda item:item[0])
     if not neighbors:
         return default, None
     dx = dy = zoom = total = 0.
-    for distance, base, end in neighbors[:8]:
+    for distance, direction, base, end in neighbors[:8]:
         weight = 1/(.08+distance)
-        dx += weight*((end.x+end.w/2)-(base.x+base.w/2))
+        dx += direction*weight*((end.x+end.w/2)-(base.x+base.w/2))
         dy += weight*((end.y+end.h/2)-(base.y+base.h/2))
         zoom += weight*base.w/end.w
         total += weight

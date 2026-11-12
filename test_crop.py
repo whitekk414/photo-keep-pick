@@ -8,11 +8,27 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from PIL import Image
+from PIL import Image, ImageDraw, ImageOps
 import crop
 
 
 class CropTest(unittest.TestCase):
+    def test_mirrored_layout_and_legacy_examples(self):
+        image = Image.new("L", (320, 200), 35)
+        ImageDraw.Draw(image).rectangle((200, 15, 299, 180), fill=230)
+        scene = crop.subject(image)
+        mirror = crop.subject(ImageOps.mirror(image))
+        base, _ = crop.suggested(image.size, .8, scene, [])
+        final = crop.box_at(image.size, .8, .84, .49, 1.2)
+        record = [(scene, base, final)]
+        _, same = crop.suggested(image.size, .8, scene, record)
+        _, flipped = crop.suggested(image.size, .8, mirror, record)
+        self.assertAlmostEqual(same.x, final.x)
+        self.assertAlmostEqual(flipped.x, 1-final.x-final.w, places=3)
+        self.assertAlmostEqual(flipped.w, final.w)
+        self.assertEqual(crop.scene_match(scene, scene[:3]), (0., 1))
+        self.assertEqual(crop.scene_match([.5]*51, [.5]*51), (0., 1))
+
     def test_confirm_export_then_suggest_for_similar_new_photo(self):
         with tempfile.TemporaryDirectory() as tmp:
             folder=Path(tmp)
