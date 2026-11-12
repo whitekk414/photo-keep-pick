@@ -3,15 +3,16 @@ import argparse
 import base64
 import html
 import io
-import json
+from habits import DEFAULT_DB, features, recommend, weights
 from pathlib import Path
 
 from PIL import Image, ImageOps
 
 
-def describe(path):
+def describe(path, personalized=False):
     with Image.open(path) as src:
         photo = ImageOps.exif_transpose(src).convert("RGB")
+    choice_features = features(photo) if personalized else None
     ratio = photo.width / photo.height
     photo.thumbnail((720, 560))
     colors = list(photo.resize((4, 4), Image.Resampling.BOX).getdata())
@@ -23,7 +24,7 @@ def describe(path):
             bits = (bits << 1) | (gray[i] > gray[i+1])
     buf = io.BytesIO()
     photo.save(buf, "JPEG", quality=80)
-    return (ratio, colors, bits), base64.b64encode(buf.getvalue()).decode("ascii")
+    return (ratio, colors, bits), base64.b64encode(buf.getvalue()).decode("ascii"), choice_features
 
 
 def similar(left, right):
@@ -33,14 +34,14 @@ def similar(left, right):
     return abs(ra/rb-1) <= .12 and distance <= 48*24 and (ha ^ hb).bit_count() <= 8
 
 
-def generate(folder, output):
+def generate(folder, output, model=None):
     groups = []
     skipped = 0
     for path in sorted(folder.iterdir()):
         if path.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp", ".bmp"} or not path.is_file():
             continue
         try:
-            key, data = describe(path)
+            key, data, row = describe(path, model is not None)
         except (ValueError, OSError, Image.DecompressionBombError):
             skipped += 1
             continue
@@ -50,16 +51,18 @@ def generate(folder, output):
         else:
             members = []
             groups.append((key, members))
-        members.append((path.name, data))
+        members.append((path.name, data, row))
     parts = []
     for _, members in groups:
         if len(members) < 2:
             continue
         number = len(parts)+1
         cards = []
-        for name, data in members:
+        pick = recommend([item[2] for item in members], model)
+        for index, (name, data, _) in enumerate(members):
+            badge = " · 按你的选片习惯推荐" if index == pick else ""
             safe = html.escape(name, quote=True)
-            cards.append(f'<label><img alt="" src="data:image/jpeg;base64,{data}"><span><input type="radio" name="g{number}" value="{safe}">{safe}</span></label>')
+            cards.append(f'<label><img alt="" src="data:image/jpeg;base64,{data}"><span><input type="radio" name="g{number}" value="{safe}">{safe}{badge}</span></label>')
         parts.append(f'<fieldset><legend>第 {number} 组</legend>{"".join(cards)}<button type="button" class="clear">清除本组选择</button></fieldset>')
     template = Path(__file__).with_name("review.html").read_text(encoding="utf-8-sig")
     page = template.replace("<!-- GROUPS -->", "".join(parts) or "<p>未找到相似照片。</p>")
@@ -72,9 +75,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="生成本地相似照片对照页")
     parser.add_argument("folder", type=Path)
     parser.add_argument("output", type=Path, help="新的 HTML 文件名")
+    parser.add_argument("--personal", action="store_true", help="使用本机已学习的选片偏好标注建议")
     args = parser.parse_args()
     try:
-        count, skipped = generate(args.folder, args.output)
+        count, skipped = generate(args.folder, args.output, weights(DEFAULT_DB) if args.personal else None)
     except OSError as exc:
         parser.exit(1, f"{exc}\n")
     print(f"生成 {count} 个候选组，跳过 {skipped} 个无法读取的文件。")
