@@ -1,0 +1,27 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Photo Keep Pick · 相似照片挑选</title>
+<style>
+body{font:16px/1.5 system-ui;margin:2em auto;max-width:1180px;padding:0 1em;color:#20362c;background:#fafaf6}
+fieldset{border:1px solid #afbfb5;margin:1.5em 0;padding:1em}label{display:inline-grid;width:min(320px,100%);vertical-align:top;margin:.3em;cursor:pointer}
+img{width:100%;height:220px;object-fit:contain;background:#e7ebe6}span{overflow-wrap:anywhere;padding:.4em}label:has(:checked){outline:3px solid #35715a}
+button{display:block;padding:.55em 1em;cursor:pointer}legend{font-weight:bold}
+</style><h1>相似照片挑选</h1><p>在每组勾选要保留的照片，也可以留空。关闭页面前请导出清单。</p>
+<!-- GROUPS -->
+<button id="save">导出选择清单（JSON）</button>
+<script>
+document.querySelectorAll('.clear').forEach(button => {
+  button.onclick = () => button.closest('fieldset').querySelectorAll('input').forEach(input => input.checked = false)
+})
+document.querySelector('#save').onclick = () => {
+  const result = Array.from(document.querySelectorAll('fieldset'), group => ({
+    candidates: Array.from(group.querySelectorAll('input'), input => input.value),
+    keeper: group.querySelector(':checked')?.value ?? null
+  }))
+  const url = URL.createObjectURL(new Blob([JSON.stringify(result,null,2)], {type:'application/json'}))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = 'keepers.json'
+  link.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+</script></html>
