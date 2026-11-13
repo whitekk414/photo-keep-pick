@@ -9,6 +9,7 @@
 <div id="work" class="work" hidden><section><h2 id="editing">调整封面</h2><canvas class="source" id="source" aria-label="原图取景，点击定位或拖动"></canvas>
 <div class="controls"><label>放大 <input id="zoom" type="range" min="1" max="4" step=".01" value="1"></label><button id="markFace" hidden>手动框脸</button><button id="reset">恢复起始构图</button></div><small>点击定位，或拖动取景框。下方照片可替换当前选图。</small><div id="strip" class="strip"></div></section>
 <section class="preview"><h2>发布顺序</h2><div id="cards" class="cards"></div><div class="controls"><label><input id="remember" type="checkbox"> 记住导出时的构图</label><button id="forget">清除偏好</button></div><small>每张 1080 × 1350，按封面、近景、细节依次保存。</small></section></div><p role="status" id="status"></p></main>
+<script src="detail-match.js"></script>
 <script src="vendor/pico/pico.js"></script>
 <script src="vendor/pico/facefinder.js"></script>
 <script>
@@ -35,6 +36,7 @@ function box(slot,i){
  const top=h>=im.height?(im.height-h)/2:clamp(slot.y*im.height-h/2,0,im.height-h);
  return {left,top,w,h};
 }
+let detailReference=null;
 let faceClassifier,marking=false,markStart=null,pendingLayout=null;
 function findPortraitFace(item){
  if('face' in item)return item.face;
@@ -120,7 +122,25 @@ async function load(list){
   added.forEach((item,k)=>{
    const i=images.length-added.length+k,btn=document.createElement('button'),img=new Image(),label=document.createElement('span');
    btn.className='thumb';img.src=item.thumb;img.alt='';label.textContent=item.name;btn.append(img,label);
-   btn.onclick=()=>{const ref=active===1?(faceLayout(slots[1])||pendingLayout):null;if(active===1)pendingLayout=ref;marking=false;markStart=null;slots[active]=startingSlot(active,i,ref);draw()};$('strip').append(btn);
+   btn.onclick=()=>{
+    const previous=slots[active];
+    if(previous.index===i)return;
+    const ref=active===1?(faceLayout(previous)||pendingLayout):null;
+    if(active===1)pendingLayout=ref;
+    marking=false;markStart=null;
+    const next=startingSlot(active,i,ref);
+    if(active===2&&detailReference){
+     const hit=i===detailReference.index?{...detailReference.point,scale:1}:DetailMatch.locate(images[i].bitmap,detailReference.anchor);
+     if(hit){
+      const src=images[detailReference.index].bitmap,dst=images[i].bitmap;
+      const normalizedWidth=detailReference.width/Math.min(src.width,src.height)*hit.scale;
+      const zoom=Math.min(dst.width,dst.height*ratio)/(normalizedWidth*Math.min(dst.width,dst.height));
+      Object.assign(next,{x:hit.x,y:hit.y,z:clamp(zoom,1,4)});
+     }
+     $('status').textContent=hit?'已匹配所选细节，请检查取景。':'这张未可靠匹配。点选新位置，或换一张继续查找。';
+    }
+    slots[active]=next;draw();
+   };$('strip').append(btn);
   });
   $('empty').hidden=true;$('work').hidden=false;draw();
  }
@@ -164,10 +184,20 @@ $('source').onpointerup=e=>{
   }
   markStart=null;draw();return;
  }
- if(!drag)return;if(!drag.moved){const p=point(e);Object.assign(slots[active],{x:clamp(p.x,0,1),y:clamp(p.y,0,1)})}drag=null;draw()};
+ if(!drag)return;
+ const slot=slots[active];
+ if(!drag.moved){
+  const p=point(e);Object.assign(slot,{x:clamp(p.x,0,1),y:clamp(p.y,0,1)});
+ }
+ if(active===2){
+  const anchor=DetailMatch.anchor(images[slot.index].bitmap,slot.x,slot.y);
+  detailReference=anchor?{index:slot.index,point:{x:slot.x,y:slot.y},width:box(slot,2).w,anchor}:null;
+  $('status').textContent=anchor?'已选定细节，换图时会尝试跟随。':'此处纹理少或靠近边缘，可点选配饰内部。';
+ }
+ drag=null;draw()};
 $('source').onpointercancel=()=>{drag=null;markStart=null;draw()};
-$('zoom').oninput=e=>{slots[active].z=Number(e.target.value);draw()};
-$('reset').onclick=()=>{slots[active]=startingSlot(active,slots[active].index);draw()};
+$('zoom').oninput=e=>{slots[active].z=Number(e.target.value);if(active===2&&detailReference?.index===slots[2].index)detailReference.width=box(slots[2],2).w;draw()};
+$('reset').onclick=()=>{if(active===2)detailReference=null;slots[active]=startingSlot(active,slots[active].index);draw()};
 $('forget').onclick=()=>{try{localStorage.removeItem(storeKey);preferences=null;$('remember').checked=false;$('status').textContent='已清除本机轮播构图偏好。'}catch{$('status').textContent='浏览器未允许访问本地存储。'}};
 new ResizeObserver(draw).observe($('source'));
 // ZIP stored entries (JPEGs already use compression). Names are fixed ASCII.
